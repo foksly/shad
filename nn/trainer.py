@@ -62,13 +62,29 @@ class DefaultTrainer:
         self.model.train()
         self.optimizer.zero_grad()
         logits = self.model(**unpacked_batch['inputs'])
-        loss = self.criterion(logits, unpacked_batch['targets'])
+        loss = self.compute_loss(logits, unpacked_batch)
         loss.backward()
         if step:
             self.optimizer.step()
 
         self.logger.log({self._add_desc('train_loss'): loss.item()}, ticker=self._add_desc('train'))
         return logits
+
+    def validate(self):
+        self.model.eval()
+        prefix = self._add_desc('valid_')
+        with torch.no_grad():
+            for batch in self.data.validloader:
+                unpacked_batch = self.unpacker(batch)
+                logits = self.model(**unpacked_batch['inputs'])
+                loss = self.compute_loss(logits, unpacked_batch)
+
+                self.logger.log({self._add_desc('valid_loss'): loss.item()}, ticker=self._add_desc('valid'))
+                self.log_metrics(logits, unpacked_batch, prefix=prefix, accumulate=True)
+            self.logger.flush_accumulated(prefix=prefix)
+
+    def compute_loss(self, logits, unpacked_batch):
+        return self.criterion(logits, unpacked_batch['targets'])
 
     def log_metrics(self, logits, unpacked_batch, prefix='', ticker=None, accumulate=False):
         scores = {}
@@ -80,16 +96,3 @@ class DefaultTrainer:
 
     def _add_desc(self, name):
         return f'{self.desc}_{name}'
-
-    def validate(self):
-        self.model.eval()
-        prefix = self._add_desc('valid_')
-        with torch.no_grad():
-            for batch in self.data.validloader:
-                unpacked_batch = self.unpacker(batch)
-                logits = self.model(**unpacked_batch['inputs'])
-                loss = self.criterion(logits, unpacked_batch['targets'])
-
-                self.logger.log({self._add_desc('valid_loss'): loss.item()}, ticker=self._add_desc('valid'))
-                self.log_metrics(logits, unpacked_batch, prefix=prefix, accumulate=True)
-            self.logger.flush_accumulated(prefix=prefix)

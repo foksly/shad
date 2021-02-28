@@ -66,6 +66,7 @@ class FID:
         classifier.eval()
         model.eval()
         device = next(model.parameters()).device
+        classifier.to(device)
 
         real_activations, fake_activations = [], []
         with torch.no_grad():

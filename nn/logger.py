@@ -9,8 +9,11 @@ class BaseLogger:
     pass
 
 class WBLogger:
-    def __init__(self, project, entity=None, config=None):
+    def __init__(self, project, run_name=None, entity=None, config=None):
         self.run = wandb.init(project=project, reinit=True, config=config)
+        if run_name:
+            self.run.name = run_name
+
         self.tickers = defaultdict(lambda: 0)
         self.accumulated_log = defaultdict(list)
 
