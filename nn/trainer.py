@@ -5,43 +5,93 @@ import torch.nn.functional as F
 
 from dataclasses import dataclass
 from .datasets.unpackers import DefaultUnpacker
-from .utils import save_checkpoint
+from .utils import save_checkpoint, parse_config, load_object, load_class
+
+import typing as tp
+import yaml
 
 import wandb
 
-
+@dataclass
 class DefaultTrainer:
-    def __init__(self, model, optimizer, criterion, data, logger, device,
-                 lr=3e-4, metrics=None, unpacker=DefaultUnpacker, valid=False, desc='',
-                 checkpoint_path=None):
-        # data
-        self.data = data
-        self.unpacker = unpacker(device)
+    data: tp.Any
+    model: tp.Any
+    optimizer: tp.Any
+    criterion: tp.Any
+    logger: tp.Any
+    metrics: tp.Any
+    device: tp.Any
+    epochs: int = 10
+    unpacker: tp.Any = DefaultUnpacker
+    valid: bool = False
+    checkpoint_dir: tp.Optional[str] = None
 
-        # logger, metrics
-        self.logger = logger
-        self.metrics = metrics or dict()
+    def __new__(cls, *args, **kwargs):
+        try:
+            initializer = cls.__initializer
+        except AttributeError:
+            cls.__initializer = initializer = cls.__init__
+            cls.__init__ = lambda *a, **k: None
 
-        # model, optimizer, criterion
-        self.model = model.to(device)
-        self.optimizer = optimizer(model.parameters(), lr)
-        self.criterion = criterion
+        added_args = {}
+        for name in list(kwargs.keys()):
+            if name not in cls.__annotations__:
+                added_args[name] = kwargs.pop(name)
 
-        self.checkpoint_path = checkpoint_path
-        self.device = device
-        self.valid = valid
-        self.desc = desc
+        ret = object.__new__(cls)
+        initializer(ret, **kwargs)
+        for new_name, new_val in added_args.items():
+            setattr(ret, new_name, new_val)
+
+        return ret
 
     @classmethod
-    def load(cls, config):
-        pass
+    def configure(cls, config):
+        config = parse_config(config)
 
-    def train(self, n_epochs=1, num_batches=None):
+        # data
+        data = load_class(name=config.data.desc, **config.data.kwargs)
+
+        # logger, metrics
+        logger = load_class(config.logger.desc, **config.logger.kwargs)
+        metrics = {}
+        for metric in config.metrics:
+            metrics[metric] = load_class(config.metrics[metric])
+
+        # train options
+        device = torch.device(config.device)
+        model = cls.load_model(config).to(device)
+        optimizer = load_class(config.optimizer.desc, model.parameters(), **config.optimizer.kwargs)
+        criterion = load_class(config.criterion.desc, **config.criterion.kwargs)
+
+        epochs = config.epochs
+        unpacker = load_class(config.data.unpacker, device) if 'unpacker' in config.data else DefaultUnpacker(device)
+        valid = config.valid
+        experiment_name = config.experiment_name
+        return cls(
+            data=data,
+            model=model,
+            optimizer=optimizer,
+            criterion=criterion,
+            logger=logger,
+            metrics=metrics,
+            device=device,
+            epochs=epochs,
+            unpacker=unpacker,
+            valid=valid,
+            checkpoint_dir=None,  # TODO: add checkpoints
+        )
+
+    @staticmethod
+    def load_model(config):
+        return load_class(config.model.desc, **config.model.hp)
+
+    def run(self):
         self.logger.watch(self.model, log='all', log_freq=50)
         self.model.train()
-        prefix = self._add_desc('train_')
+        prefix = 'train_'
 
-        for epoch in range(n_epochs):
+        for epoch in range(self.epochs):
             for batch in self.data.trainloader:
                 unpacked_batch = self.unpacker(batch)
                 logits = self.train_batch(unpacked_batch)
@@ -52,8 +102,8 @@ class DefaultTrainer:
             if self.valid:
                 self.validate()
 
-            if self.checkpoint_path is not None:
-                save_checkpoint(self.model, self.optimizer, path=self.checkpoint_path)
+            # if self.checkpoint_dir is not None:
+            #     save_checkpoint(self.model, self.optimizer, path=self.checkpoint_dir)
 
         self.model.eval()
         return self.model
@@ -67,19 +117,19 @@ class DefaultTrainer:
         if step:
             self.optimizer.step()
 
-        self.logger.log({self._add_desc('train_loss'): loss.item()}, ticker=self._add_desc('train'))
+        self.logger.log({'train_loss': loss.item()}, ticker='train')
         return logits
 
     def validate(self):
         self.model.eval()
-        prefix = self._add_desc('valid_')
+        prefix = 'valid_'
         with torch.no_grad():
             for batch in self.data.validloader:
                 unpacked_batch = self.unpacker(batch)
                 logits = self.model(**unpacked_batch['inputs'])
                 loss = self.compute_loss(logits, unpacked_batch)
 
-                self.logger.log({self._add_desc('valid_loss'): loss.item()}, ticker=self._add_desc('valid'))
+                self.logger.log({'valid_loss': loss.item()}, ticker='valid')
                 self.log_metrics(logits, unpacked_batch, prefix=prefix, accumulate=True)
             self.logger.flush_accumulated(prefix=prefix)
 
@@ -93,6 +143,3 @@ class DefaultTrainer:
 
         if scores:
             self.logger.log(scores, ticker=ticker, accumulate=accumulate)
-
-    def _add_desc(self, name):
-        return f'{self.desc}_{name}'

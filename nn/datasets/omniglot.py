@@ -94,7 +94,7 @@ class InvertImage:
 
 
 class OmniglotData:
-    def __init__(self, download_path='./Omniglot', download=True, val=False, test=True):
+    def __init__(self, data_path='./Omniglot', download=False, val=False, test=True, batch_size=64):
         self.n_classes = N_CLASSES
 
         self.transforms = transforms.Compose([
@@ -104,7 +104,8 @@ class OmniglotData:
             transforms.Normalize([0.5], [0.5])
         ])
 
-        self.dataset = FullOmniglot(download_path, transform=self.transforms, download=download)
+        self.dataset = FullOmniglot(data_path, transform=self.transforms, download=download)
+        self.build_dataloaders(batch_size)
 
     def build_dataloaders(self, batch_size=64, testloader=True):
         if not testloader:
